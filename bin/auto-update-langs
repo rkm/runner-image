@@ -37,6 +37,7 @@ def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
             )
             assert version_match
             current_ver = version_match.group(1)
+            break
 
     if not current_ver:
         print('Error: Could not detect version')
