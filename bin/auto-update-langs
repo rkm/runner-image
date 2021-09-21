@@ -5,32 +5,49 @@ import argparse
 import datetime
 import json
 import re
+import shutil
 import urllib.request
+from typing import NamedTuple
 
 from bs4 import BeautifulSoup
 
-_DOCKERFILE_LANG_RE = re.compile(r".*'lang: (.*)'.*")
 
-# TODO(rkm 2021-09-20) namedtuple for update details
+class LangUpdateInfo(NamedTuple):
+    lang: str
+    old_ver: str
+    new_ver: str
+    pr_text: str
 
 
-def _check_dotnet() -> None:
-    print('checking dotnet')
+def _check_dotnet() -> LangUpdateInfo | None:
+    print('\n## dotnet')
 
-    # 1. Grab current version
+    dotnet_url_re = re.compile(r'^(ARG DOTNET_URL=)(.*)$')
+    dotnet_sha_re = re.compile(r'^(ARG DOTNET_SHA512=)(.*)$')
+
+    # 1. Read current version
+
     current_ver = None
     with open('Dockerfile') as f:
         for line in f:
-            # TODO(rkm 2021-09-21) DOTNET_URL
-            match = re.match(r'ARG DOTNET_VER=(.*)', line)
-            if match:
-                current_ver = match.group(1)
+            # cache
+            line_match = dotnet_url_re.match(line)
+            if line_match:
+                current_url = line_match.group(2)
+                version_match = re.match(
+                    r'.*dotnet-sdk-(.*)-linux-x64.tar.gz',
+                    current_url,
+                )
+                assert version_match
+                current_ver = version_match.group(1)
 
     if not current_ver:
-        print('Error: Could not detect dotnet version')
+        print('Error: Could not detect version')
         return None
+    else:
+        print(f"Current version is '{current_ver}'")
 
-    # 2. Grab latest version
+    # 2. Determine latest version
 
     api_url = 'https://api.github.com/repos/dotnet/installer/releases'
     query = 'per_page=5'
@@ -40,7 +57,8 @@ def _check_dotnet() -> None:
     candidate_ver = None
 
     releases_sorted = sorted(
-        releases, key=lambda x: datetime.datetime.fromisoformat(
+        releases,
+        key=lambda x: datetime.datetime.fromisoformat(
             x['created_at'][:-1],
         ),
     )
@@ -59,21 +77,24 @@ def _check_dotnet() -> None:
         if not candidate_ver:
             candidate_ver = release_ver_long
 
-    # 3. Check different
+    # 3. Exit if we have the latest
 
     if not candidate_ver:
-        print(f'have latest dotnet version ({current_ver})')
+        print('Have latest version')
         return None
 
-    print(f'new {candidate_ver}')
+    print(f"New version detected: '{candidate_ver}'")
 
     # 4. get checksum
 
     version_base_index = [
-        i for i, c in enumerate(
+        i
+        for i, c in enumerate(
             candidate_ver,
-        ) if c == '.'
+        )
+        if c == '.'
     ][-2]
+
     url = (
         'https://dotnet.microsoft.com/download/dotnet/thank-you/'
         f'sdk-{candidate_ver[:version_base_index]}-linux-x64-binaries'
@@ -82,14 +103,52 @@ def _check_dotnet() -> None:
         soup = BeautifulSoup(f.read(), 'html.parser')
 
     download_url = soup.find(id='directLink').text
-    checksum = soup.find(id='checksum').get('value')
+    sha512 = soup.find(id='checksum').get('value')
 
-    data = {
-        'version': candidate_ver,
-        'download_url': download_url,
-        'checksum': f'sha512:{checksum}',
+    replacements = {
+        dotnet_url_re: download_url,
+        dotnet_sha_re: sha512,
     }
-    print(data)
+
+    # 5. Update Dockerfile
+
+    shutil.copy2('Dockerfile', 'Dockerfile.dotnet')
+
+    with open('Dockerfile.dotnet', 'r+') as f:
+        lines = f.readlines()
+        f.seek(0)
+        f.truncate()
+        for line in lines:
+            for rep in replacements:
+                subst = re.sub(rep, fr'\g<1>{replacements[rep]}', line)
+                if subst != line:
+                    line = subst
+                    del replacements[rep]
+                    break
+            f.write(line)
+
+    if replacements:
+        print(f'Error: unused replacements {replacements}')
+        return None
+
+    # TODO(rkm 2021-09-21) Return data for PR text
+    # 'download_url': download_url,
+    return LangUpdateInfo(
+        'dotnet',
+        current_ver,
+        candidate_ver[:version_base_index],
+        'PR text here!',
+    )
+
+
+def _create_lang_update(update_info: LangUpdateInfo) -> None:
+
+    # new branch from master
+    # checkout Dockerfile from master
+    # copy Dockerfile.x to Dockerfile
+    # commit
+    # push
+    # open PR
 
     return None
 
@@ -99,21 +158,29 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('-l', '--languages', help='Selected languages only')
     parser.add_argument(
-        '-d', '--dry-run',
+        '-d',
+        '--dry-run',
         help="Check only; don't create any PRs",
     )
     args = parser.parse_args()
 
-    selected_langs = set(
-        args.languages.split(
-            ',',
-        ),
-    ) if args.languages else set()
+    selected_langs = (
+        set(
+            args.languages.split(
+                ',',
+            ),
+        )
+        if args.languages
+        else set()
+    )
     all_langs = set()
+
+    dockerfile_lang_re = re.compile(r".*'lang: (.*)'.*")
 
     with open('Dockerfile') as f:
         for line in f:
-            match = _DOCKERFILE_LANG_RE.match(line)
+            # move here
+            match = dockerfile_lang_re.match(line)
             if match:
                 all_langs.add(match.group(1))
 
@@ -134,7 +201,9 @@ def main() -> int:
             print(f"Error: No handler for '{lang}'")
             return 1
         else:
-            lang_checks_map[lang]()
+            update_info = lang_checks_map[lang]()
+            if update_info:
+                _create_lang_update(update_info)
 
     return 0
 
