@@ -6,6 +6,7 @@ import datetime
 import json
 import re
 import shutil
+import subprocess
 import urllib.request
 from typing import NamedTuple
 
@@ -22,6 +23,7 @@ class LangUpdateInfo(NamedTuple):
 def _check_dotnet() -> LangUpdateInfo | None:
     print('\n## dotnet')
 
+    lang = 'dotnet'
     dotnet_url_re = re.compile(r'^(ARG DOTNET_URL=)(.*)$')
     dotnet_sha_re = re.compile(r'^(ARG DOTNET_SHA512=)(.*)$')
 
@@ -85,13 +87,11 @@ def _check_dotnet() -> LangUpdateInfo | None:
 
     print(f"New version detected: '{candidate_ver}'")
 
-    # 4. get checksum
+    # 4. Get new URL and checksum
 
     version_base_index = [
         i
-        for i, c in enumerate(
-            candidate_ver,
-        )
+        for i, c in enumerate(candidate_ver)
         if c == '.'
     ][-2]
 
@@ -105,16 +105,16 @@ def _check_dotnet() -> LangUpdateInfo | None:
     download_url = soup.find(id='directLink').text
     sha512 = soup.find(id='checksum').get('value')
 
+    # 5. Update Dockerfile
+
     replacements = {
         dotnet_url_re: download_url,
         dotnet_sha_re: sha512,
     }
 
-    # 5. Update Dockerfile
+    shutil.copy2('Dockerfile', f'Dockerfile.{lang}')
 
-    shutil.copy2('Dockerfile', 'Dockerfile.dotnet')
-
-    with open('Dockerfile.dotnet', 'r+') as f:
+    with open(f'Dockerfile.{lang}', 'r+') as f:
         lines = f.readlines()
         f.seek(0)
         f.truncate()
@@ -131,26 +131,49 @@ def _check_dotnet() -> LangUpdateInfo | None:
         print(f'Error: unused replacements {replacements}')
         return None
 
-    # TODO(rkm 2021-09-21) Return data for PR text
-    # 'download_url': download_url,
+    # TODO(rkm 2021-09-21) PR text
     return LangUpdateInfo(
-        'dotnet',
+        lang,
         current_ver,
         candidate_ver[:version_base_index],
         'PR text here!',
     )
 
 
-def _create_lang_update(update_info: LangUpdateInfo) -> None:
+def _run(*cmd: str, capture: bool = False) -> str | None:
+    subprocess.check_call(('echo', '$', *cmd))
+    if capture:
+        output = subprocess.check_output(cmd).decode().strip()
+        print(output)
+        return output
+    else:
+        subprocess.check_call(cmd)
+        return None
 
-    # new branch from master
-    # checkout Dockerfile from master
-    # copy Dockerfile.x to Dockerfile
-    # commit
-    # push
-    # open PR
 
-    return None
+def _create_lang_update(info: LangUpdateInfo) -> None:
+
+    print(f'\n## creating update for {info.lang}')
+    orig_branch = _run(
+        'git', 'rev-parse', '--abbrev-ref', 'HEAD',
+        capture=True,
+    )
+    assert orig_branch
+
+    lang_branch = f'autoupdate-lang-{info.lang}'
+    try:
+        _run('git', 'branch', '-D', lang_branch)
+        _run('git', 'checkout', '-b', lang_branch, 'master')
+        _run('git', 'checkout', 'master', '--', 'Dockerfile')
+        _run('cp', f'Dockerfile.{info.lang}', 'Dockerfile')
+        _run('git', 'diff', capture=True)
+        _run('git', 'add', 'Dockerfile')
+        _run('git', 'commit', '-m', f"'autoupdate dotnet to {info.new_ver}'")
+    finally:
+        _run('git', 'checkout', orig_branch)
+        _run('git', 'stash', 'pop')
+
+    # TODO(rkm 2021-09-21) Post PR using GH API
 
 
 def main() -> int:
@@ -160,6 +183,8 @@ def main() -> int:
     parser.add_argument(
         '-d',
         '--dry-run',
+        default=False,
+        action='store_true',
         help="Check only; don't create any PRs",
     )
     args = parser.parse_args()
@@ -201,8 +226,14 @@ def main() -> int:
             print(f"Error: No handler for '{lang}'")
             return 1
         else:
-            update_info = lang_checks_map[lang]()
-            if update_info:
+            # update_info = lang_checks_map[lang]()
+            update_info = LangUpdateInfo(
+                'dotnet',
+                'v1',
+                'v2',
+                'PR text here!',
+            )
+            if update_info and not args.dry_run:
                 _create_lang_update(update_info)
 
     return 0
