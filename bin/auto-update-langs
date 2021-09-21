@@ -13,7 +13,6 @@ from bs4 import BeautifulSoup
 
 
 class LangUpdateInfo(NamedTuple):
-    lang: str
     old_ver: str
     new_ver: str
     pr_text: str
@@ -22,7 +21,6 @@ class LangUpdateInfo(NamedTuple):
 def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
     print('\n## dotnet')
 
-    lang = 'dotnet'
     dotnet_url_re = re.compile(r'^(ARG DOTNET_URL=)(.*)$')
     dotnet_sha_re = re.compile(r'^(ARG DOTNET_SHA512=)(.*)$')
 
@@ -109,7 +107,7 @@ def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
         dotnet_sha_re: sha512,
     }
 
-    with open(f'Dockerfile.{lang}', 'w') as f:
+    with open('Dockerfile.dotnet', 'w') as f:
         for line in dockerfile_lines:
             for rep in replacements:
                 subst = re.sub(rep, fr'\g<1>{replacements[rep]}', line)
@@ -125,7 +123,6 @@ def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
 
     # TODO(rkm 2021-09-21) PR text
     return LangUpdateInfo(
-        lang,
         current_ver,
         candidate_ver[:version_base_index],
         'PR text here!',
@@ -143,21 +140,21 @@ def _run(*cmd: str, capture: bool = False) -> str | None:
         return None
 
 
-def _create_lang_update(info: LangUpdateInfo) -> None:
+def _create_lang_update(lang: str, info: LangUpdateInfo) -> None:
 
-    print(f'\n## creating update for {info.lang}')
+    print(f'\n## creating update for {lang}')
     orig_branch = _run(
         'git', 'rev-parse', '--abbrev-ref', 'HEAD',
         capture=True,
     )
     assert orig_branch
 
-    lang_branch = f'autoupdate-lang-{info.lang}'
+    lang_branch = f'autoupdate-lang-{lang}'
     try:
         _run('git', 'branch', '-D', lang_branch)
         _run('git', 'checkout', '-b', lang_branch, 'master')
         _run('git', 'checkout', 'master', '--', 'Dockerfile')
-        _run('cp', f'Dockerfile.{info.lang}', 'Dockerfile')
+        _run('cp', f'Dockerfile.{lang}', 'Dockerfile')
         _run('git', 'diff', capture=True)
         _run('git', 'add', 'Dockerfile')
         _run('git', 'commit', '-m"autoupdate dotnet to {info.new_ver}"')
@@ -222,7 +219,7 @@ def main() -> int:
             #     'PR text here!',
             # )
             if update_info and not args.dry_run:
-                _create_lang_update(update_info)
+                _create_lang_update(lang, update_info)
 
     return 0
 
