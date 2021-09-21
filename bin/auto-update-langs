@@ -52,14 +52,14 @@ def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
     with urllib.request.urlopen(f'{api_url}?{query}') as f:
         releases = json.loads(f.read())
 
-    candidate_ver = None
-
     releases_sorted = sorted(
         releases,
         key=lambda x: datetime.datetime.fromisoformat(
             x['created_at'][:-1],
         ),
     )
+
+    candidate_ver = None
 
     # Check for newer major SDK versions, which may be published before
     # releases of the current SDK major version
