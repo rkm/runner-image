@@ -5,7 +5,6 @@ import argparse
 import datetime
 import json
 import re
-import shutil
 import subprocess
 import urllib.request
 from typing import NamedTuple
@@ -20,7 +19,7 @@ class LangUpdateInfo(NamedTuple):
     pr_text: str
 
 
-def _check_dotnet() -> LangUpdateInfo | None:
+def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
     print('\n## dotnet')
 
     lang = 'dotnet'
@@ -30,18 +29,16 @@ def _check_dotnet() -> LangUpdateInfo | None:
     # 1. Read current version
 
     current_ver = None
-    with open('Dockerfile') as f:
-        for line in f:
-            # cache
-            line_match = dotnet_url_re.match(line)
-            if line_match:
-                current_url = line_match.group(2)
-                version_match = re.match(
-                    r'.*dotnet-sdk-(.*)-linux-x64.tar.gz',
-                    current_url,
-                )
-                assert version_match
-                current_ver = version_match.group(1)
+    for line in dockerfile_lines:
+        line_match = dotnet_url_re.match(line)
+        if line_match:
+            current_url = line_match.group(2)
+            version_match = re.match(
+                r'.*dotnet-sdk-(.*)-linux-x64.tar.gz',
+                current_url,
+            )
+            assert version_match
+            current_ver = version_match.group(1)
 
     if not current_ver:
         print('Error: Could not detect version')
@@ -105,20 +102,15 @@ def _check_dotnet() -> LangUpdateInfo | None:
     download_url = soup.find(id='directLink').text
     sha512 = soup.find(id='checksum').get('value')
 
-    # 5. Update Dockerfile
+    # 5. Write new Dockerfile
 
     replacements = {
         dotnet_url_re: download_url,
         dotnet_sha_re: sha512,
     }
 
-    shutil.copy2('Dockerfile', f'Dockerfile.{lang}')
-
-    with open(f'Dockerfile.{lang}', 'r+') as f:
-        lines = f.readlines()
-        f.seek(0)
-        f.truncate()
-        for line in lines:
+    with open(f'Dockerfile.{lang}', 'w') as f:
+        for line in dockerfile_lines:
             for rep in replacements:
                 subst = re.sub(rep, fr'\g<1>{replacements[rep]}', line)
                 if subst != line:
@@ -168,7 +160,7 @@ def _create_lang_update(info: LangUpdateInfo) -> None:
         _run('cp', f'Dockerfile.{info.lang}', 'Dockerfile')
         _run('git', 'diff', capture=True)
         _run('git', 'add', 'Dockerfile')
-        _run('git', 'commit', '-m', f"'autoupdate dotnet to {info.new_ver}'")
+        _run('git', 'commit', '-m"autoupdate dotnet to {info.new_ver}"')
     finally:
         _run('git', 'checkout', orig_branch)
         _run('git', 'stash', 'pop')
@@ -181,8 +173,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('-l', '--languages', help='Selected languages only')
     parser.add_argument(
-        '-d',
-        '--dry-run',
+        '-d', '--dry-run',
         default=False,
         action='store_true',
         help="Check only; don't create any PRs",
@@ -190,11 +181,7 @@ def main() -> int:
     args = parser.parse_args()
 
     selected_langs = (
-        set(
-            args.languages.split(
-                ',',
-            ),
-        )
+        set(args.languages.split(','))
         if args.languages
         else set()
     )
@@ -203,11 +190,12 @@ def main() -> int:
     dockerfile_lang_re = re.compile(r".*'lang: (.*)'.*")
 
     with open('Dockerfile') as f:
-        for line in f:
-            # move here
-            match = dockerfile_lang_re.match(line)
-            if match:
-                all_langs.add(match.group(1))
+        dockerfile_lines = f.readlines()
+
+    for line in dockerfile_lines:
+        match = dockerfile_lang_re.match(line)
+        if match:
+            all_langs.add(match.group(1))
 
     for lang in selected_langs:
         if lang not in all_langs:
@@ -226,13 +214,13 @@ def main() -> int:
             print(f"Error: No handler for '{lang}'")
             return 1
         else:
-            # update_info = lang_checks_map[lang]()
-            update_info = LangUpdateInfo(
-                'dotnet',
-                'v1',
-                'v2',
-                'PR text here!',
-            )
+            update_info = lang_checks_map[lang](dockerfile_lines)
+            # update_info = LangUpdateInfo(
+            #     'dotnet',
+            #     'v1',
+            #     'v2',
+            #     'PR text here!',
+            # )
             if update_info and not args.dry_run:
                 _create_lang_update(update_info)
 
