@@ -137,7 +137,7 @@ RUN : \
     && rm /tmp/swift.tar.gz \
     && :
 
-ARG DOTNET_VER=6.0.100-preview.7.21379.14
+ARG DOTNET_URL=https://download.visualstudio.microsoft.com/download/pr/ce3fd989-b69d-439a-9cac-09ad40597db8/2848d49480b6e7b1b2a18cfa46d724e2/dotnet-sdk-6.0.100-preview.7.21379.14-linux-x64.tar.gz
 ARG DOTNET_SHA512=c8757325407b5eb1e3870f0db87eeaf44df978313c0b2a7f465ec7d0a5647317cba597264ec81577ea0b3bd97bd33d782234392e8e592e073126792a0406df7b
 ENV \
     PATH=/opt/dotnet:$PATH \
@@ -153,7 +153,7 @@ RUN : \
         --fail \
         --silent \
         --output /tmp/dotnet.tar.gz \
-        https://dotnetcli.azureedge.net/dotnet/Sdk/"$DOTNET_VER"/dotnet-sdk-"$DOTNET_VER"-linux-x64.tar.gz \
+        "$DOTNET_URL" \
     && echo "${DOTNET_SHA512} /tmp/dotnet.tar.gz" | sha512sum --check \
     && tar -C $dotnet_root -xf /tmp/dotnet.tar.gz \
     && rm /tmp/dotnet.tar.gz \

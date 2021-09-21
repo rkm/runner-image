@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import re
+import urllib.request
+
+from bs4 import BeautifulSoup
+
+_DOCKERFILE_LANG_RE = re.compile(r".*'lang: (.*)'.*")
+
+# TODO(rkm 2021-09-20) namedtuple for update details
+
+
+def _check_dotnet() -> None:
+    print('checking dotnet')
+
+    # 1. Grab current version
+    current_ver = None
+    with open('Dockerfile') as f:
+        for line in f:
+            # TODO(rkm 2021-09-21) DOTNET_URL
+            match = re.match(r'ARG DOTNET_VER=(.*)', line)
+            if match:
+                current_ver = match.group(1)
+
+    if not current_ver:
+        print('Error: Could not detect dotnet version')
+        return None
+
+    # 2. Grab latest version
+
+    api_url = 'https://api.github.com/repos/dotnet/installer/releases'
+    query = 'per_page=5'
+    with urllib.request.urlopen(f'{api_url}?{query}') as f:
+        releases = json.loads(f.read())
+
+    candidate_ver = None
+
+    releases_sorted = sorted(
+        releases, key=lambda x: datetime.datetime.fromisoformat(
+            x['created_at'][:-1],
+        ),
+    )
+
+    # Check for newer major SDK versions, which may be published before
+    # releases of the current SDK major version
+    for release in reversed(releases_sorted):
+
+        release_ver_long = release['tag_name'][1:]
+        release_major = int(release_ver_long[0])
+
+        if release_major > int(current_ver[0]):
+            candidate_ver = release_ver_long
+            break
+
+        if not candidate_ver:
+            candidate_ver = release_ver_long
+
+    # 3. Check different
+
+    if not candidate_ver:
+        print(f'have latest dotnet version ({current_ver})')
+        return None
+
+    print(f'new {candidate_ver}')
+
+    # 4. get checksum
+
+    version_base_index = [
+        i for i, c in enumerate(
+            candidate_ver,
+        ) if c == '.'
+    ][-2]
+    url = (
+        'https://dotnet.microsoft.com/download/dotnet/thank-you/'
+        f'sdk-{candidate_ver[:version_base_index]}-linux-x64-binaries'
+    )
+    with urllib.request.urlopen(url) as f:
+        soup = BeautifulSoup(f.read(), 'html.parser')
+
+    download_url = soup.find(id='directLink').text
+    checksum = soup.find(id='checksum').get('value')
+
+    data = {
+        'version': candidate_ver,
+        'download_url': download_url,
+        'checksum': f'sha512:{checksum}',
+    }
+    print(data)
+
+    return None
+
+
+def main() -> int:
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-l', '--languages', help='Selected languages only')
+    parser.add_argument(
+        '-d', '--dry-run',
+        help="Check only; don't create any PRs",
+    )
+    args = parser.parse_args()
+
+    selected_langs = set(
+        args.languages.split(
+            ',',
+        ),
+    ) if args.languages else set()
+    all_langs = set()
+
+    with open('Dockerfile') as f:
+        for line in f:
+            match = _DOCKERFILE_LANG_RE.match(line)
+            if match:
+                all_langs.add(match.group(1))
+
+    for lang in selected_langs:
+        if lang not in all_langs:
+            print(f"Error: Unknown language '{lang}'")
+            return 1
+
+    if not selected_langs:
+        selected_langs = all_langs
+
+    lang_checks_map = {
+        'dotnet': _check_dotnet,
+    }
+
+    for lang in selected_langs:
+        if lang not in lang_checks_map:
+            print(f"Error: No handler for '{lang}'")
+            return 1
+        else:
+            lang_checks_map[lang]()
+
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
