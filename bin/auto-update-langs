@@ -57,13 +57,14 @@ def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
         key=lambda x: datetime.datetime.fromisoformat(
             x['created_at'][:-1],
         ),
+        reverse=True,
     )
 
     candidate_ver = None
 
     # Check for newer major SDK versions, which may be published before
     # releases of the current SDK major version
-    for release in reversed(releases_sorted):
+    for release in releases_sorted:
 
         release_ver_long = release['tag_name'][1:]
         release_major = int(release_ver_long[0])
