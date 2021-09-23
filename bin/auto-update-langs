@@ -15,7 +15,6 @@ from bs4 import BeautifulSoup
 class LangUpdateInfo(NamedTuple):
     old_ver: str
     new_ver: str
-    pr_text: str
 
 
 def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
@@ -130,11 +129,9 @@ def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
         print(f'Error: unused replacements {replacements}')
         return None
 
-    # TODO(rkm 2021-09-21) PR text
     return LangUpdateInfo(
         strip_build_version(current_ver),
         new_version,
-        'PR text here!',
     )
 
 
