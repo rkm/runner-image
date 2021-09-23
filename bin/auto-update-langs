@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import urllib.parse
 import urllib.request
 from typing import Any
 from typing import NamedTuple
@@ -19,6 +20,7 @@ from bs4 import BeautifulSoup
 # Temp
 ORG = 'rkm'
 
+DEFAULT_BRANCH = 'master'
 REPO_ROOT = os.getcwd()
 
 
@@ -161,6 +163,7 @@ def _run(*cmd: str, capture: bool = False, **kwargs: Any) -> str | None:
 def _create_lang_updates(
     tempdir: str,
     updates: dict[str, LangUpdateInfo],
+    gh_token: str,
 ) -> None:
 
     git_files = _run('git', 'ls-files', capture=True)
@@ -178,10 +181,16 @@ def _create_lang_updates(
 
     for lang in updates:
 
-        run('git', 'reset', '--hard')
-        run('git', 'checkout', 'master')
-
         lang_branch = f'autoupdate-lang-{lang}'
+        update_title = (
+            f'autoupdate {lang} '
+            f'from {updates[lang].old_ver} '
+            f'to {updates[lang].new_ver}'
+        )
+
+        run('git', 'reset', '--hard')
+        run('git', 'checkout', DEFAULT_BRANCH)
+
         try:
             run('git', 'branch', '-D', lang_branch)
         except subprocess.CalledProcessError:
@@ -193,17 +202,26 @@ def _create_lang_updates(
 
         run('git', 'diff', capture=True)
         run('git', 'add', 'Dockerfile')
-        run(
-            'git', 'commit', '-m',
-            (
-                f'autoupdate {lang} '
-                f'from {updates[lang].old_ver} '
-                f'to {updates[lang].new_ver}'
-            ),
-        )
+        run('git', 'commit', '-m', update_title)
         run('git', 'push', ORG, 'HEAD', '--force')
 
-    # TODO(rkm 2021-09-21) Post PR using GH API
+        data = json.dumps({
+            'head': lang_branch,
+            'base': DEFAULT_BRANCH,
+            'title': update_title,
+            'body': '',
+            'maintainer_can_modify': True,
+        }).encode()
+        req = urllib.request.Request(
+            f'https://api.github.com/repos/{ORG}/runner-image/pulls',
+            headers={
+                'accept': 'application/vnd.github.v3+json',
+                'Authorization': f'token {gh_token}',
+            },
+            data=data,
+        )
+        with urllib.request.urlopen(req) as resp:
+            print(f'{lang} PR: {resp.msg}')
 
 
 def main() -> int:
@@ -254,23 +272,25 @@ def main() -> int:
             return 1
         else:
             update_info = lang_checks_map[lang](dockerfile_lines)
-            # update_info = LangUpdateInfo(
-            #     'v1',
-            #     'v2',
-            #     ["dockerfile\n", "lines\n"],
-            # )
             if update_info:
                 updates[lang] = update_info
                 print(
                     f'{lang}: update from {update_info.old_ver} '
                     f'to {update_info.new_ver}',
                 )
+    print()
 
     if updates and not args.dry_run:
+
+        gh_token = os.environ.get('GITHUB_TOKEN', None)
+        if not gh_token:
+            print('Error: $GITHUB_TOKEN requried')
+            return 1
+
         # work in a tempdir for git operations, mostly so developing this
         # script isn't a pain
         with tempfile.TemporaryDirectory() as tempdir:
-            _create_lang_updates(tempdir, updates)
+            _create_lang_updates(tempdir, updates, gh_token)
     else:
         print('no updates, or dry-run selected')
 
