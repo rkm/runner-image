@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 # Temp
 ORG = 'rkm'
 
-GIT_DIR = os.getcwd()
+REPO_ROOT = os.getcwd()
 
 
 class LangUpdateInfo(NamedTuple):
@@ -158,44 +158,50 @@ def _run(*cmd: str, capture: bool = False, **kwargs: Any) -> str | None:
         return None
 
 
-def _create_lang_updates(updates: dict[str, LangUpdateInfo]) -> None:
+def _create_lang_updates(
+    tempdir: str,
+    updates: dict[str, LangUpdateInfo],
+) -> None:
 
-    # work in a tempdir for git operations, mostly so developing this script
-    # isn't a pain
-    with tempfile.TemporaryDirectory() as tempdir:
+    git_files = _run('git', 'ls-files', capture=True)
+    assert git_files
+    for f in git_files.split():
+        d = os.path.join(tempdir, os.path.dirname(f))
+        os.makedirs(d, exist_ok=True)
+        shutil.copy2(f, d)
+    shutil.copytree(
+        os.path.join(REPO_ROOT, '.git'),
+        os.path.join(tempdir, '.git'),
+    )
 
-        tmp_repo = f'{tempdir}/repo'
-        # TODO(rkm 2021-09-23) git ls-files + .git (avoid venv etc.)
-        shutil.copytree(GIT_DIR, tmp_repo)
+    run = functools.partial(_run, cwd=tempdir)
 
-        run = functools.partial(_run, cwd=tmp_repo)
+    for lang in updates:
 
-        for lang in updates:
+        run('git', 'reset', '--hard')
+        run('git', 'checkout', 'master')
 
-            run('git', 'reset', '--hard')
-            run('git', 'checkout', 'master')
+        lang_branch = f'autoupdate-lang-{lang}'
+        try:
+            run('git', 'branch', '-D', lang_branch)
+        except subprocess.CalledProcessError:
+            pass
+        run('git', 'checkout', '-b', lang_branch)
 
-            lang_branch = f'autoupdate-lang-{lang}'
-            try:
-                run('git', 'branch', '-D', lang_branch)
-            except subprocess.CalledProcessError:
-                pass
-            run('git', 'checkout', '-b', lang_branch)
+        with open(os.path.join(tempdir, 'Dockerfile'), 'w') as fp:
+            fp.writelines(updates[lang].dockerfile_lines)
 
-            with open(os.path.join(tmp_repo, 'Dockerfile'), 'w') as f:
-                f.writelines(updates[lang].dockerfile_lines)
-
-            run('git', 'diff', capture=True)
-            run('git', 'add', 'Dockerfile')
-            run(
-                'git', 'commit', '-m',
-                (
-                    f'autoupdate {lang} '
-                    f'from {updates[lang].old_ver} '
-                    f'to {updates[lang].new_ver}'
-                ),
-            )
-            run('git', 'push', ORG, 'HEAD', '--force')
+        run('git', 'diff', capture=True)
+        run('git', 'add', 'Dockerfile')
+        run(
+            'git', 'commit', '-m',
+            (
+                f'autoupdate {lang} '
+                f'from {updates[lang].old_ver} '
+                f'to {updates[lang].new_ver}'
+            ),
+        )
+        run('git', 'push', ORG, 'HEAD', '--force')
 
     # TODO(rkm 2021-09-21) Post PR using GH API
 
@@ -261,7 +267,10 @@ def main() -> int:
                 )
 
     if updates and not args.dry_run:
-        _create_lang_updates(updates)
+        # work in a tempdir for git operations, mostly so developing this
+        # script isn't a pain
+        with tempfile.TemporaryDirectory() as tempdir:
+            _create_lang_updates(tempdir, updates)
     else:
         print('no updates, or dry-run selected')
 
