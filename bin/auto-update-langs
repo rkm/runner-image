@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 class LangUpdateInfo(NamedTuple):
     old_ver: str
     new_ver: str
+    dockerfile_lines: list[str]
 
 
 def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
@@ -108,22 +109,22 @@ def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
     download_url = soup.find(id='directLink').text
     sha512 = soup.find(id='checksum').get('value')
 
-    # 5. Write new Dockerfile
+    # 5. Replace lines in Dockerfile
 
     replacements = {
         dotnet_url_re: download_url,
         dotnet_sha_re: sha512,
     }
 
-    with open('Dockerfile.dotnet', 'w') as f:
-        for line in dockerfile_lines:
-            for rep in replacements:
-                subst = re.sub(rep, fr'\g<1>{replacements[rep]}', line)
-                if subst != line:
-                    line = subst
-                    del replacements[rep]
-                    break
-            f.write(line)
+    new_dockerfile_lines = []
+    for line in dockerfile_lines:
+        for rep in replacements:
+            subst = re.sub(rep, fr'\g<1>{replacements[rep]}', line)
+            if subst != line:
+                line = subst
+                del replacements[rep]
+                break
+        new_dockerfile_lines.append(line)
 
     if replacements:
         print(f'Error: unused replacements {replacements}')
@@ -132,6 +133,7 @@ def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
     return LangUpdateInfo(
         strip_build_version(current_ver),
         new_version,
+        new_dockerfile_lines,
     )
 
 
