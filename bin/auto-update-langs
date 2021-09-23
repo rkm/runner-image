@@ -3,13 +3,23 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import json
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 import urllib.request
+from typing import Any
 from typing import NamedTuple
 
 from bs4 import BeautifulSoup
+
+# Temp
+ORG = 'rkm'
+
+GIT_DIR = os.getcwd()
 
 
 class LangUpdateInfo(NamedTuple):
@@ -137,38 +147,55 @@ def _check_dotnet(dockerfile_lines: list[str]) -> LangUpdateInfo | None:
     )
 
 
-def _run(*cmd: str, capture: bool = False) -> str | None:
+def _run(*cmd: str, capture: bool = False, **kwargs: Any) -> str | None:
     subprocess.check_call(('echo', '$', *cmd))
     if capture:
-        output = subprocess.check_output(cmd).decode().strip()
+        output = subprocess.check_output(cmd, **kwargs).decode().strip()
         print(output)
         return output
     else:
-        subprocess.check_call(cmd)
+        subprocess.check_call(cmd, **kwargs)
         return None
 
 
-def _create_lang_update(lang: str, info: LangUpdateInfo) -> None:
+def _create_lang_updates(updates: dict[str, LangUpdateInfo]) -> None:
 
-    print(f'\n## creating update for {lang}')
-    orig_branch = _run(
-        'git', 'rev-parse', '--abbrev-ref', 'HEAD',
-        capture=True,
-    )
-    assert orig_branch
+    # work in a tempdir for git operations, mostly so developing this script
+    # isn't a pain
+    with tempfile.TemporaryDirectory() as tempdir:
 
-    lang_branch = f'autoupdate-lang-{lang}'
-    try:
-        _run('git', 'branch', '-D', lang_branch)
-        _run('git', 'checkout', '-b', lang_branch, 'master')
-        _run('git', 'checkout', 'master', '--', 'Dockerfile')
-        _run('cp', f'Dockerfile.{lang}', 'Dockerfile')
-        _run('git', 'diff', capture=True)
-        _run('git', 'add', 'Dockerfile')
-        _run('git', 'commit', '-m"autoupdate dotnet to {info.new_ver}"')
-    finally:
-        _run('git', 'checkout', orig_branch)
-        _run('git', 'stash', 'pop')
+        tmp_repo = f'{tempdir}/repo'
+        # TODO(rkm 2021-09-23) git ls-files + .git (avoid venv etc.)
+        shutil.copytree(GIT_DIR, tmp_repo)
+
+        run = functools.partial(_run, cwd=tmp_repo)
+
+        for lang in updates:
+
+            run('git', 'reset', '--hard')
+            run('git', 'checkout', 'master')
+
+            lang_branch = f'autoupdate-lang-{lang}'
+            try:
+                run('git', 'branch', '-D', lang_branch)
+            except subprocess.CalledProcessError:
+                pass
+            run('git', 'checkout', '-b', lang_branch)
+
+            with open(os.path.join(tmp_repo, 'Dockerfile'), 'w') as f:
+                f.writelines(updates[lang].dockerfile_lines)
+
+            run('git', 'diff', capture=True)
+            run('git', 'add', 'Dockerfile')
+            run(
+                'git', 'commit', '-m',
+                (
+                    f'autoupdate {lang} '
+                    f'from {updates[lang].old_ver} '
+                    f'to {updates[lang].new_ver}'
+                ),
+            )
+            run('git', 'push', ORG, 'HEAD', '--force')
 
     # TODO(rkm 2021-09-21) Post PR using GH API
 
@@ -214,6 +241,7 @@ def main() -> int:
         'dotnet': _check_dotnet,
     }
 
+    updates = {}
     for lang in selected_langs:
         if lang not in lang_checks_map:
             print(f"Error: No handler for '{lang}'")
@@ -221,13 +249,21 @@ def main() -> int:
         else:
             update_info = lang_checks_map[lang](dockerfile_lines)
             # update_info = LangUpdateInfo(
-            #     'dotnet',
             #     'v1',
             #     'v2',
-            #     'PR text here!',
+            #     ["dockerfile\n", "lines\n"],
             # )
-            if update_info and not args.dry_run:
-                _create_lang_update(lang, update_info)
+            if update_info:
+                updates[lang] = update_info
+                print(
+                    f'{lang}: update from {update_info.old_ver} '
+                    f'to {update_info.new_ver}',
+                )
+
+    if updates and not args.dry_run:
+        _create_lang_updates(updates)
+    else:
+        print('no updates, or dry-run selected')
 
     return 0
 
