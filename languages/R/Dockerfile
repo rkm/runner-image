@@ -1,4 +1,4 @@
-FROM ubuntu:focal
+FROM ubuntu:20.04
 RUN : \
     # https://askubuntu.com/questions/496549/error-you-must-put-some-source-uris-in-your-sources-list
     && sed -i 's/^# deb-src /deb-src /' /etc/apt/sources.list \
