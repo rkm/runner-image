@@ -6,7 +6,7 @@ nodeenv==1.7.0
 platformdirs==2.5.2
 pre-commit==2.20.0
 PyYAML==6.0
-setuptools==63.1.0
+setuptools==65.5.1
 six==1.16.0
 toml==0.10.2
 virtualenv==20.15.1
